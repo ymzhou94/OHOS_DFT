@@ -1,0 +1,6 @@
+# Synthetic example, not a device capture.
+# tracer: nop
+          worker-42 ( 42) [001] .... 332767.123456789: tracing_mark_write: payload=332767.123456789
+         hitrace-42 ( 42) [001] .... 332767.424788: tracing_mark_write: trace_event_clock_sync: realtime_ts=1793113965749
+         hitrace-42 ( 42) [001] .... 332768.424988: tracing_mark_write: trace_event_clock_sync: realtime_ts=1793113966749
+         hitrace-42 ( 42) [001] .... 332769.424588: tracing_mark_write: trace_event_clock_sync: realtime_ts=1793113967749
