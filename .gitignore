@@ -9,6 +9,7 @@ __pycache__/
 !examples/*.ftrace
 examples/*_epoch.ftrace
 trace_epoch_sync_*/
+timestamps_epoch_sync_*/
 filename_epoch_sync_*/
 hilog_1000_*/
 alignment_test/

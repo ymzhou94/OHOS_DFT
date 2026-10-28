@@ -16,38 +16,61 @@ JSON 中选定的纳秒偏移 `epoch_minus_kernel_nanoseconds` 使用十进制�
 
 | 方法 | 输入 | 估计方式与限制 |
 | --- | --- | --- |
-| 多个 `realtime_ts` 同步点（推荐） | 原始文本 ftrace | 在误差使结果偏小的模型下取最大样本偏移，同时保留全部样本、中位数与范围。同步点只保存 epoch 毫秒，无法承诺绝对误差上限。 |
-| 多文件名区间交集（数据依赖最少） | 文件名或命令输出，以及设备 UTC 偏移 | 对每个整秒时间建立偏移区间并取交集，输出中点、上下界和量化不确定性。不读取二进制 trace，也不需要 hilog。 |
+| `hdc shell timestamps`（设备支持时推荐） | 设备时钟读数 | 取 20 次 `CLOCK_REALTIME - CLOCK_BOOTTIME` 的中位数；纳秒格式，无需 tracing 或时区转换。读钟间隔及绝对准确度尚未验证。 |
+| 多个 `realtime_ts` 同步点 | 原始文本 ftrace | 在误差使结果偏小的模型下取最大样本偏移，保留全部样本、中位数与范围。同步点保存 epoch 毫秒，适合使用 trace 内记录的校准信息。 |
+| 多文件名区间交集 | 文件名或命令输出，以及设备 UTC 偏移 | 对整秒偏移区间取交集，输出中点、上下界和量化不确定性。适合只有二进制 trace 文件名的情况。 |
 
-两种方法独立、显式运行。同步点缺失时不会自动切换到文件名方法，也不会静默丢弃不一致样本。
+各方法独立、显式运行。命令或同步点缺失时不会自动切换方法，也不会静默丢弃不一致样本。
 
 ## 环境要求
 
 - Python 3.9+；已在 Windows/PowerShell、Python 3.14 上测试。
 - 离线分析只需要输入文件和本仓库脚本。
-- 在线采集需要 `hdc` 位于 `PATH`、连接一台设备、已开启开发者/调试访问，并具有 hitrace 采集权限。
-- 同一时间只运行一个采样程序。在线采集会修改设备共享的 tracing 状态，使用 204800 KB 缓冲区。
+- 在线采集需要 `hdc` 位于 `PATH`、连接一台设备、已开启开发者/调试访问。直接采样还需要设备提供 `timestamps` 命令。
+- 两种 hitrace 方法需要采集权限，同一时间只运行一个 trace 采样程序：它们会修改设备共享的 tracing 状态，使用 204800 KB 缓冲区。直接 timestamps 采样不修改 tracing 状态。
 
-在线采集明确指定 `boot` 时钟，它包含休眠时间。偏移仅适用于同一设备、同次开机、同一内核时钟及同一 epoch 时间基准。重启或系统校时后应重新采集。使用 `mono` 时，休眠也会改变其与 epoch 的偏移。离线脚本不会根据数值推断或验证原 trace 所用时钟。
+直接采样使用 `CLOCK_BOOTTIME`，在线 hitrace 采集明确指定 `boot`，它包含休眠时间。偏移仅适用于同一设备、同次开机、同一内核时钟及同一 epoch 时间基准。重启或系统校时后应重新采集，并尽量在数据采集附近校准。使用 `mono` 时，休眠也会改变其与 epoch 的偏移。离线脚本不会根据数值推断或验证原 trace 所用时钟。
 
 ## 无设备快速验证
 
 `examples/` 中是合成示例，不是设备原始采集数据。
 
 ```sh
+python get_timestamps_epoch_offset.py examples/timestamps.txt
 python get_trace_epoch_offset.py examples/boot.ftrace
 python get_filename_epoch_offset.py examples/filenames.txt --utc-offset=+08:00
 python trace_to_epoch.py examples/boot.ftrace converted_epoch.ftrace
 python -m unittest discover -s tests -t . -v
 ```
 
-前两个命令会输出 JSON，并保存 `examples/boot.offset.json`、`examples/filenames.offset.json`。两个独立示例的偏移分别为 `1792781198.324412000` 秒和 `1735689500.225000000` 秒，它们不属于同一条时间轴。
+三个估计脚本会输出 JSON，并保存 `examples/timestamps.offset.json`、`examples/boot.offset.json`、`examples/filenames.offset.json`。合成示例的偏移依次为 `1792781199.859681091`、`1792781198.324412000` 和 `1735689500.225000000` 秒，它们不属于同一条时间轴。
 
 转换脚本创建新文件，拒绝覆盖已有输出，也拒绝再次转换自身生成的 epoch trace。只修改事件头的时间戳并添加校准注释，保留事件正文中的时间值。`converted_epoch.ftrace` 是派生分析文件；不同查看器对 epoch 时间戳的支持不同，因此应保留原始 trace。
 
 ## 在线采集
 
-### 推荐：多个 trace 同步点
+### 推荐：直接 timestamps 采样
+
+```sh
+hdc shell timestamps
+python get_timestamps_epoch_offset.py
+```
+
+脚本调用 20 次 `hdc shell timestamps`，调用之间等待 50 毫秒。每次将 `CLOCK_REALTIME`（epoch）与 `CLOCK_BOOTTIME`（boot）配对；输出中的 `CLOCK_MONOTONIC` 如存在则一并保留，但不替代 boot。无需 trace 缓冲区、采集类别、hilog 或设备时区。命令开销会增加总采样时间。
+
+结果保存至 `timestamps_epoch_sync_*/`：`capture.log`、以空行分隔的原始 `timestamps.txt` 和 `timestamps.offset.json`。已有采样可离线重算：
+
+```sh
+python get_timestamps_epoch_offset.py path/to/timestamps.txt
+```
+
+保存的每组采样之间必须有空行；每组必须恰好包含一个 `CLOCK_REALTIME` 和一个 `CLOCK_BOOTTIME`。时钟缺失、格式错误或重复都会报错。设备不支持 `timestamps` 时保留诊断并失败，需要显式选择其他方法。
+
+选定偏移为中位数四舍六入五成双到整数纳秒。报告同时保留精确中位数、最小值、最大值、极差及每组时钟读数。极差超过 1 毫秒时拒绝固定偏移；这是一致性阈值，不是准确度保证。单组离线采样标记为 `single_point_unverified`。
+
+在已测试设备上，该方法避免了同步点的毫秒截断及文件名量化，因此优先推荐。设备工具内部的读钟顺序和间隔尚未验证；中位数用于描述典型读数，不能修正系统性的读钟延迟。已有 trace 内的同步点仍提供其采集时刻的校准依据。现有 `trace_to_epoch.py` 继续使用内嵌同步点；timestamps JSON 用于下文的另一组数据处理。
+
+### 多个 trace 同步点
 
 ```sh
 python get_trace_epoch_offset.py
@@ -70,7 +93,7 @@ python get_trace_epoch_offset.py path/to/original.ftrace
 
 至少需要一个格式正确的 `realtime_ts` 同步点。只有一个点时标记为 `single_point_unverified`。多个点要求偏移范围不超过 1 毫秒；这是一个一致性检查阈值，不是误差保证，调度延迟也可能导致检查失败。失败时应检查原始同步点及采集日志。
 
-### 数据依赖最少：文件名方法
+### 已有二进制 trace 文件名
 
 ```sh
 python get_filename_epoch_offset.py --utc-offset=+08:00
@@ -96,7 +119,7 @@ UTC 偏移是**设备在采集时的本地时区偏移**，不是主机时区。
 import json
 from decimal import Decimal
 
-with open("examples/boot.offset.json", encoding="utf-8") as source:
+with open("examples/timestamps.offset.json", encoding="utf-8") as source:
     calibration = json.load(source)
 
 offset_ns = int(calibration["epoch_minus_kernel_nanoseconds"])
@@ -112,6 +135,15 @@ kernel_ns = epoch_ns - offset_ns
 文件名方法应同时保留 `offset_lower_inclusive_nanoseconds`、`offset_upper_exclusive_nanoseconds` 和 `quantization_uncertainty_nanoseconds`。它们表达模型下的文件名量化不确定性，不是实测的绝对误差上限。
 
 ## 估计原理
+
+### 直接读钟模型
+
+```text
+O_i = realtime_ns_i - boottime_ns_i
+O_estimate = 中位数舍入到最近整数纳秒，恰为半纳秒时取偶数
+```
+
+相减的是设备时钟读数，因此不需要从偏移中加减 hdc 传输耗时。传输和调度影响采样发生的时刻；设备两次读钟之间的延迟可能造成系统性偏差。样本极差及 1 毫秒一致性阈值都不能约束该偏差。整数和 `Decimal` 计算保留所有已表示的纳秒。
 
 ### 同步点模型
 
@@ -148,6 +180,7 @@ upper = min(W_i + 1秒 - B_i)
 以下来自单台设备、同次开机的实验，不是普遍的精度保证：
 
 - 两组独立的 20 点同步采样，最大偏移估计相差 119 微秒。
+- 后续一组 20 次 `timestamps` 采样的 epoch-minus-boot 极差为 938 纳秒。这是重复性观测，不是绝对准确度；未经验证 epoch 基准保持不变，不可将该偏移直接套用到旧采集。
 - 20 个文件名将 1 秒的不确定区间缩小到 47.076719 毫秒宽。
 - 1000 条 hilog 对比中，`monotonic` 显示值的偏移有整秒跳变；同一 PID 中的 MUSL 日志还出现不同的秒时间域。显示的小数部分复用了现实时间纳秒，因此不把整个 hilog `monotonic` 输出当作统一的 boot 或 mono 时钟。
 - 从 hilog 整数秒边界得到的 107.187 微秒宽约束依赖尚未验证的日志产生端时钟模型，未作为正式校准方法。
@@ -155,14 +188,14 @@ upper = min(W_i + 1秒 - B_i)
 ## 诊断与范围
 
 - 设备命令附带明确的远端退出状态标记，不会仅凭 hdc 主机进程返回零认定设备命令成功。
-- 缺失/格式异常的同步点、超过 1 毫秒的同步偏移范围、在线样本数不完整、无效时区、文件名区间不相交都会报错，原始数据与命令日志保留供诊断。
+- 缺失/格式异常的时钟或同步点、超过 1 毫秒的时钟/同步点偏移范围、在线样本数不完整、无效时区、文件名区间不相交都会报错，原始数据与命令日志保留供诊断。
 - 文本转换脚本只处理文本 ftrace，不解码二进制 `.sys` 或 `.htrace`。
 - 支持的时钟、类别和权限取决于设备，不会自动替换时钟或采集格式。
 - 原始设备 trace、诊断日志、生成的偏移报告及 Python 缓存不纳入 Git。复现实验时请在本地保留文件名清单和结果。
 
 ## 测试
 
-单元测试统一放在 [`tests/`](tests/README.md)，覆盖同步点偏移估计、文件名区间交集、hdc 失败诊断和 trace 转换。输入均为合成数据或模拟调用，无需连接设备。可用 `python -m unittest tests.test_hdc_capture -v` 运行单个模块。GitHub Actions 在 Python 3.8、3.9、3.10 上运行全部测试和 Pylint。
+单元测试统一放在 [`tests/`](tests/README.md)，覆盖直接读钟采样、同步点偏移估计、文件名区间交集、hdc 失败诊断和 trace 转换。输入均为合成数据或模拟调用，无需连接设备。可用 `python -m unittest tests.test_hdc_capture -v` 运行单个模块。GitHub Actions 在 Python 3.8、3.9、3.10 上运行全部测试和 Pylint。
 
 ## 作者
 

@@ -1,4 +1,4 @@
-"""Persist the shared JSON output format used by both offset estimators."""
+"""Persist the shared JSON output format used by the offset estimators."""
 
 import json
 

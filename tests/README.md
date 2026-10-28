@@ -6,6 +6,7 @@ These tests validate offset estimation, timestamp conversion and command failure
 
 | Module / 模块 | Coverage / 覆盖内容 |
 | --- | --- |
+| `test_get_timestamps_epoch_offset.py` | Boot/mono distinction, exact nanosecond subtraction, median rounding, malformed/missing/duplicate clocks, offset consistency and 20-call collection. / 区分 boot 与 mono、纳秒精确相减、中位数舍入、时钟格式错误/缺失/重复、偏移一致性及 20 次采集。 |
 | `test_get_trace_epoch_offset.py` | Exact nanosecond arithmetic, multi-marker estimates, median precision, missing/malformed markers and inconsistent offsets. / 纳秒精确计算、多同步点估计、中位数精度、同步点缺失或异常及偏移不一致。 |
 | `test_get_filename_epoch_offset.py` | Filename interval intersection, quantization bounds, duplicate names, unpadded nanoseconds, timezones and conversion direction. / 文件名区间交集、量化边界、重复文件名、未补零纳秒字段、时区及换算方向。 |
 | `test_hdc_capture.py` | Host/device exit status, missing status markers, file transfers and diagnostic output. / 主机与设备退出状态、状态标记缺失、文件传输及诊断输出。 |
