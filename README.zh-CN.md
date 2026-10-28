@@ -175,6 +175,33 @@ upper = min(W_i + 1秒 - B_i)
 
 中点使区间内的最大量化误差最小。只有新增文件覆盖了不同的小数秒位置，交集才会继续缩小。交集为空时直接报错。此模型假设文件名中的现实时间与 boot 值采样时刻足够接近；工具没有测定两者采样延迟的上限。
 
+## Hilog 与 kmsg 的对齐约束
+
+`timestamps` 偏移适用于已确认使用 `boot` 时钟的 trace。不能仅因另一种时间看起来像开机后的秒数，就直接套用该偏移。增加采样可以减小可变采样因素的影响，但不能证明时钟同源，也不能消除系统性偏差。
+
+### Hilog 的 monotonic 显示
+
+公开的 [HiLog 格式化实现](https://github.com/openharmony/hiviewdfx_hilog/blob/master/frameworks/libhilog/utils/log_print.cpp#L101) 将 `mono_sec` 与现实时间小数字段 `tv_nsec` 拼接。因此，`hilog -v monotonic -v nsec` 不一定是完整的 `CLOCK_MONOTONIC` 或 `CLOCK_BOOTTIME` 读数。不同日志产生端（包括 MUSL）还可能提供不同时间域的整数秒。
+
+比较不同格式前，应按 PID、TID、级别和消息正文匹配同一条记录；连续执行 tail 查询可能得到不同的日志窗口。直接使用 epoch 减去显示的 monotonic 值不能可靠校准。整秒边界推断还要求所选产生端的秒数等于 epoch 采样时刻的 `floor(boot)`，所得区间依赖这一尚未验证的假设，不是绝对准确度上限，本项目未将其实现为正式校准方法。
+
+### Kmsg 的时间前缀与内嵌时间
+
+对于 `10-28 22:16:00 <1> [415778.408205] ...`，不能直接把日期时间前缀与方括号值视为同时采样的 epoch/boot 对。公开 OpenHarmony 实现中，[LogKmsg](https://github.com/openharmony/hiviewdfx_hilog/blob/master/services/hilogd/log_kmsg.cpp#L45) 先读取内核日志，再由 [ParseKmsg](https://github.com/openharmony/hiviewdfx_hilog/blob/master/services/hilogd/kmsg_parser.cpp#L76) 读取 `CLOCK_REALTIME` 作为消息元数据，同时保留内核原文。这会引入事件产生到接收解析的时间间隔。之后通过 hdc 查询已保存的日志，不会使这两个时间变成同时采样。
+
+方括号时间的时钟来源也必须单独确认。例如，[Linux 文档说明 printk 时间戳可以使用 sched_clock](https://docs.kernel.org/timers/timekeeping.html)，这并不保证具有 `CLOCK_BOOTTIME` 语义。上述内容是公开实现的参考行为，不能直接证明本机实现相同：本机 `uname -r` 返回 `HongMeng Kernel 1.13.0`，原始 kmsg 访问受限，尚未定位其实际生成时间戳的函数。本机添加 `-v epoch -v nsec` 后，923 条匹配的 kmsg 记录前缀也未改变；这些选项未提供纳秒 epoch 前缀。
+
+如果方括号确实是 boot 时间、前缀在接收时读取现实时间、epoch-minus-boot 保持不变，且本地时区正确，那么整秒前缀满足：
+
+```text
+表观偏移 = 真正的 epoch-minus-boot + 接收延迟 - 截断误差
+接收延迟 >= 0；0 <= 截断误差 < 1 秒
+```
+
+在这些前提下，仅靠排队和截断不可能让偏移比真实值小超过 1 秒。如果 `timestamps` 基准适用于该段采集数据，实测约 17.665 秒的负向差异就说明至少一个前提不成立。内核日志使用不同的时钟、日期时间映射未同步更新、系统校时等均是可能解释，但尚未确认本机的具体根因。下文的 kmsg 表观区间不是经过验证的校准区间或误差上限。
+
+确认两种时钟及其采样位置之前，不应使用 kmsg 两列时间转换 boot trace。定位本机原因需要对应固件源码，或同时记录 kmsg 时钟、`CLOCK_BOOTTIME` 和 `CLOCK_REALTIME` 的共同事件。本项目脚本不会推断或自动替换这种映射。
+
 ## 设备实验观察
 
 以下来自单台设备、同次开机的实验，不是普遍的精度保证：
@@ -184,6 +211,16 @@ upper = min(W_i + 1秒 - B_i)
 - 20 个文件名将 1 秒的不确定区间缩小到 47.076719 毫秒宽。
 - 1000 条 hilog 对比中，`monotonic` 显示值的偏移有整秒跳变；同一 PID 中的 MUSL 日志还出现不同的秒时间域。显示的小数部分复用了现实时间纳秒，因此不把整个 hilog `monotonic` 输出当作统一的 boot 或 mono 时钟。
 - 从 hilog 整数秒边界得到的 107.187 微秒宽约束依赖尚未验证的日志产生端时钟模型，未作为正式校准方法。
+
+2026-10-28 的另一轮对比在日志查询前后分别采样 20 次 `timestamps`，各 hilog/kmsg 格式请求 1000 条记录。下表基准为两组偏移中位数的平均值 `1792781199.859681638` 秒，差值方向均为“方法值减基准值”：
+
+| 测量 | 实测结果与限制 |
+| --- | --- |
+| 直接 `timestamps` | 两组中位数相差 156 纳秒，组内极差为 1093 和 1405 纳秒，仅说明重复性。 |
+| Hilog epoch/monotonic | 763 条正文唯一匹配记录的小数部分全部相同。两组主要表观偏移与基准相差 +140.318362 和 -859.681638 毫秒；另有一条 MUSL 记录使用不同的秒时间域。 |
+| Hilog 整秒约束 | 对主要时间域的 762 条记录，条件区间宽 10.293125 毫秒，包含基准；区间中点比基准低 4.6647635 毫秒。 |
+| Kmsg 前缀/方括号推断 | 假设区间宽 2.005 毫秒，但中点比基准低 17.665455138 秒。区间很窄也不能证明时钟映射正确。 |
+| 1 秒 boot trace | 单个毫秒分辨率同步点比基准低 575.638 微秒，只能作为一致性检查，不能作为绝对准确度测量。 |
 
 ## 诊断与范围
 

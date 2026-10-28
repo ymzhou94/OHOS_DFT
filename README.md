@@ -175,6 +175,33 @@ estimate = midpoint of [lower, upper)
 
 The midpoint minimizes the maximum quantization error within that interval. More filenames narrow the interval only when their subsecond phases add information. An empty intersection is an error. The interval assumes the filename's wall and boot values describe the same instant closely enough; their sampling delay is not bounded by this tool.
 
+## Hilog and kmsg alignment constraints
+
+Use the `timestamps` offset for a trace whose clock is confirmed to be `boot`. Do not apply it to another clock merely because its values look like seconds since startup. More samples can reduce variable sampling effects, but cannot establish clock identity or remove a systematic offset.
+
+### Hilog monotonic display
+
+The public [HiLog formatter](https://github.com/openharmony/hiviewdfx_hilog/blob/master/frameworks/libhilog/utils/log_print.cpp#L101) combines `mono_sec` with `tv_nsec`, the realtime fractional field. Thus `hilog -v monotonic -v nsec` is not necessarily a complete `CLOCK_MONOTONIC` or `CLOCK_BOOTTIME` reading. Different producers, including MUSL, can also supply seconds from different clock domains.
+
+Match the same records by PID, TID, level and message before comparing formats; sequential tail queries can contain different records. Direct epoch-minus-displayed-monotonic subtraction is not a reliable calibration. Integer-second boundary inference additionally assumes that the selected producer's seconds equal `floor(boot)` at the epoch sampling instant. Its interval is conditional on that unverified assumption, not an absolute accuracy bound, and is not implemented as a calibration method here.
+
+### Kmsg prefix and embedded timestamp
+
+For a line such as `10-28 22:16:00 <1> [415778.408205] ...`, the calendar prefix and bracketed value must not be assumed to be a simultaneous epoch/boot pair. In the public OpenHarmony implementation, [LogKmsg](https://github.com/openharmony/hiviewdfx_hilog/blob/master/services/hilogd/log_kmsg.cpp#L45) reads kernel log data, then [ParseKmsg](https://github.com/openharmony/hiviewdfx_hilog/blob/master/services/hilogd/kmsg_parser.cpp#L76) samples `CLOCK_REALTIME` for the message metadata while preserving the kernel text. This introduces an event-to-reception interval. Retrieving the stored log later through hdc does not turn those timestamps into a simultaneous pair.
+
+The bracketed timestamp's clock must be verified separately. For example, [Linux documents printk timestamps using sched_clock](https://docs.kernel.org/timers/timekeeping.html), which is not a guarantee of `CLOCK_BOOTTIME` semantics. This is reference behavior, not proof of the tested device's implementation: its `uname -r` reports `HongMeng Kernel 1.13.0`, access to raw kmsg is restricted, and its exact timestamp-generation functions have not been identified. On this device, adding `-v epoch -v nsec` also left the prefixes unchanged for 923 matching kmsg records; those options did not expose a nanosecond epoch prefix.
+
+If the bracketed value really is boot time, the prefix samples realtime on reception, epoch-minus-boot stays constant, and the local timezone is correct, a whole-second prefix gives:
+
+```text
+apparent_offset = true_epoch_minus_boot + reception_delay - truncation
+reception_delay >= 0; 0 <= truncation < 1 second
+```
+
+Under these assumptions, queueing and truncation alone cannot make the offset more than one second smaller than the true value. If the `timestamps` reference applies to this capture, the observed roughly 17.665-second negative discrepancy therefore violates at least one premise. A different kernel log clock, a stale calendar-time mapping or an epoch adjustment are possible explanations; none has been established as the device's root cause. The apparent kmsg interval below is not a validated calibration interval or an error bound.
+
+Do not use the kmsg columns to convert boot traces without identifying both clocks and their sampling points. Resolving the device-specific cause requires matching firmware sources or a common event instrumented with the kmsg clock, `CLOCK_BOOTTIME` and `CLOCK_REALTIME`. These scripts do not infer or substitute that mapping.
+
 ## Observations from device experiments
 
 These are observations from one device/boot, not general accuracy guarantees:
@@ -184,6 +211,16 @@ These are observations from one device/boot, not general accuracy guarantees:
 - Twenty filenames reduced a one-second interval to 47.076719 ms wide.
 - A 1000-record hilog comparison found whole-second jumps in the displayed `monotonic` offset and a MUSL record in a different seconds domain, including within the same PID. The displayed fraction reuses realtime nanoseconds. Therefore, this tool does not treat all hilog `monotonic` output as a uniform boot or mono clock.
 - A 107.187 microsecond-wide constraint inferred from hilog integer-second boundaries depends on an unverified producer-clock model. It is not used as the production calibration method.
+
+An additional comparison on 2026-10-28 bracketed the log queries with two batches of 20 `timestamps` readings. Each hilog/kmsg format requested 1000 records. The reference below is the mean of the two batch medians, `1792781199.859681638` seconds; all differences use `method - reference`:
+
+| Measurement | Observed result and limitation |
+| --- | --- |
+| Direct `timestamps` | Batch medians differed by 156 ns; spreads were 1093 ns and 1405 ns. Repeatability only. |
+| Hilog epoch/monotonic | 763 unique body matches all shared the fractional field. The two main apparent offsets differed from the reference by +140.318362 ms and -859.681638 ms; one MUSL record used another seconds domain. |
+| Hilog integer-second constraint | For the 762 records in the main cohort, the conditional interval was 10.293125 ms wide and contained the reference. Its midpoint was 4.6647635 ms below the reference. |
+| Kmsg prefix/bracket inference | The hypothetical interval was 2.005 ms wide, but its midpoint was 17.665455138 seconds below the reference. A narrow interval did not validate the clock mapping. |
+| One-second boot trace | Its single millisecond-resolution sync marker was 575.638 microseconds below the reference: a consistency check, not an absolute accuracy measurement. |
 
 ## Diagnostics and scope
 
