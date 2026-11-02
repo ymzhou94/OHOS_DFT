@@ -55,7 +55,9 @@ python -m unittest discover -s tests -t . -v
 
 在 Windows 上做毫秒级测量，请使用 **CPython 3.13 或更高版本**。从 3.13 起，`time.time_ns()` 使用 `GetSystemTimePreciseAsFileTime()`。3.12 也能运行脚本，但其 PC 时钟分辨率较低，这部分误差未计入输出区间。已在 Windows、CPython 3.14.3 和 HDC 3.2.0c 上实测。[Python 时钟文档](https://docs.python.org/zh-cn/3/library/time.html#time.time)
 
-脚本在同一个 shell 中发送 50 次回车。PC 在每次发送前和读到完整应答时分别取时。假设采样期间时差稳定，各次区间的交集给出“设备时间减 PC 时间”的范围，上界计入设备微秒截断，± 表示区间半宽。[采样时序图](docs/pc-device-clock.html)
+每次回车都让同一个设备 shell 返回新的时间戳。区间假设采样期间时差稳定，上界计入设备微秒截断。
+
+完整测量运行 `python test_time.py --trace clock-run`。输出目录必须是新目录，采集期间需独占 HiTrace。脚本先读取一次 `timestamps`，再开始 boot 时钟采集，在 PC 终端和本地 HDC 转发通道为同一批请求打点。`result.json` 保存修正前后的“设备时间减 PC 时间”区间，单位为纳秒。`per-probe.csv` 给出各次取时、PC 两端等待，以及读钟在 `boot.ftrace` 中的估计位置。调度列留空表示该读数无法与唯一的 CPU 运行片段对应。修正后的范围仍包含 USB 和设备侧时延。[采样时序图](docs/pc-device-clock.html)
 
 ### 推荐：直接 timestamps 采样
 

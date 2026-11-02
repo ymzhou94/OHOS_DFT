@@ -3,7 +3,7 @@
 import unittest
 from unittest.mock import call, patch
 
-from test_time import collect_samples, offset_bounds
+from test_time import collect_samples, offset_bounds, pair_samples
 
 
 class PcDeviceTimeTests(unittest.TestCase):
@@ -20,6 +20,28 @@ class PcDeviceTimeTests(unittest.TestCase):
         """A clock step can make the intersection empty."""
         with self.assertRaisesRegex(ValueError, "No common clock offset"):
             offset_bounds([(1000, 1000, 1100), (2000, 4000, 2100)])
+
+    def test_relay_pairing(self):
+        """TCP reads can split frame headers or combine several HDC frames."""
+        def frame(payload):
+            return len(payload).to_bytes(4, "big") + payload
+
+        send = frame(b"\r")
+        setup = frame(b"HDC[1.000000]")
+        reply = frame(b"\r\nHDC[2.000") + frame(b"001]")
+        upstream = [(11, send[:2]), (12, send[2:])]
+        downstream = [(8, setup), (15, reply[:-2]), (16, reply[-2:])]
+        device = 2_000_001_000
+        self.assertEqual(pair_samples([(10, device, 20)], upstream, downstream),
+                         [(12, device, 16)])
+        for bad in [(13, device, 20), (10, device + 1000, 20), (10, device, 14)]:
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "mismatch"):
+                pair_samples([bad], upstream, downstream)
+
+    def test_incomplete_relay_frame(self):
+        """A truncated length-prefixed reply cannot produce a clock result."""
+        with self.assertRaisesRegex(ValueError, "Incomplete HDC frame"):
+            pair_samples([], [], [(10, b"\x00\x00\x00\x05ab")])
 
     @patch("test_time.SAMPLE_COUNT", 2)
     @patch("test_time.time.time_ns", side_effect=range(1, 9))

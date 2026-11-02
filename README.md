@@ -55,7 +55,9 @@ Run `python test_time.py` with one connected device whose shell supports `$EPOCH
 
 For millisecond measurements on Windows, use **CPython 3.13 or later**. Starting with 3.13, `time.time_ns()` uses `GetSystemTimePreciseAsFileTime()`. The script also runs on 3.12, but its coarser PC clock adds uncertainty beyond the reported interval. Tested on Windows with CPython 3.14.3 and HDC 3.2.0c. [Python clock documentation](https://docs.python.org/3/library/time.html#time.time)
 
-Each of 50 carriage returns asks the same shell for a new timestamp. The PC records its time before writing and upon reading the complete reply. The reported interval accounts for the device’s microsecond truncation and assumes a stable offset during sampling. The ± value is the half-width. [Sampling sequence](docs/pc-device-clock.html)
+Each carriage return asks the same shell for a new timestamp. The interval assumes a stable offset throughout the batch and includes device microsecond truncation.
+
+For the complete measurement run `python test_time.py --trace clock-run` with a **new** output directory and exclusive use of HiTrace. It reads `timestamps` once, starts a boot-clock trace and measures the same probes at the PC terminal and at a loopback relay to the HDC server. `result.json` gives the raw and corrected device-minus-PC intervals in nanoseconds. `per-probe.csv` contains the timestamps, PC delays and estimated positions in `boot.ftrace`. Empty switch fields mean the device reading could not be associated with exactly one recorded CPU slice. USB and device-side delays remain inside the corrected bounds. [Sampling sequence](docs/pc-device-clock.html)
 
 ### Recommended: direct timestamps sampling
 
