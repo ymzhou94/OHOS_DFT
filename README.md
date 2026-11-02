@@ -49,6 +49,14 @@ The converter creates a new file and refuses to overwrite an existing output or 
 
 ## Sample a connected device
 
+### Compare the PC and device clocks
+
+Run `python test_time.py` with one connected device whose shell supports `$EPOCHREALTIME`. The standalone script uses the Python standard library and the system terminal (`conhost.exe` on Windows, `script` on Linux/macOS).
+
+For millisecond measurements on Windows, use **CPython 3.13 or later**. Starting with 3.13, `time.time_ns()` uses `GetSystemTimePreciseAsFileTime()`. The script also runs on 3.12, but its coarser PC clock adds uncertainty beyond the reported interval. Tested on Windows with CPython 3.14.3 and HDC 3.2.0c. [Python clock documentation](https://docs.python.org/3/library/time.html#time.time)
+
+Each of 50 carriage returns asks the same shell for a new timestamp. The PC records its time before writing and upon reading the complete reply. The reported interval accounts for the device’s microsecond truncation and assumes a stable offset during sampling. The ± value is the half-width. [Sampling sequence](docs/pc-device-clock.html)
+
 ### Recommended: direct timestamps sampling
 
 ```sh

@@ -49,6 +49,14 @@ python -m unittest discover -s tests -t . -v
 
 ## 在线采集
 
+### 比较 PC 和设备时间
+
+连接一台 shell 支持 `$EPOCHREALTIME` 的设备，运行 `python test_time.py`。这个独立脚本使用 Python 标准库和系统终端（Windows 的 `conhost.exe`，Linux/macOS 的 `script`）。
+
+在 Windows 上做毫秒级测量，请使用 **CPython 3.13 或更高版本**。从 3.13 起，`time.time_ns()` 使用 `GetSystemTimePreciseAsFileTime()`。3.12 也能运行脚本，但其 PC 时钟分辨率较低，这部分误差未计入输出区间。已在 Windows、CPython 3.14.3 和 HDC 3.2.0c 上实测。[Python 时钟文档](https://docs.python.org/zh-cn/3/library/time.html#time.time)
+
+脚本在同一个 shell 中发送 50 次回车。PC 在每次发送前和读到完整应答时分别取时。假设采样期间时差稳定，各次区间的交集给出“设备时间减 PC 时间”的范围，上界计入设备微秒截断，± 表示区间半宽。[采样时序图](docs/pc-device-clock.html)
+
 ### 推荐：直接 timestamps 采样
 
 ```sh

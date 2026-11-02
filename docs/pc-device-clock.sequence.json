@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "PC 与设备的时差测量",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [1060, 650]
+  },
+  "participants": [
+    {"id": "pc", "type": "frontend", "label": "PC 采样脚本", "sublabel": "test_time.py"},
+    {"id": "shell", "type": "messagebus", "label": "常驻终端", "sublabel": "hdc shell"},
+    {"id": "device", "type": "backend", "label": "设备时钟", "sublabel": "$EPOCHREALTIME"}
+  ],
+  "segments": [
+    {"from": 145, "to": 250, "label": "建立会话"},
+    {"from": 268, "to": 488, "label": "重复 50 次"},
+    {"from": 505, "to": 580, "label": "结束采样"}
+  ],
+  "messages": [
+    {"from": "pc", "to": "shell", "y": 175, "label": "打开终端并设置提示符"},
+    {"from": "shell", "to": "pc", "y": 225, "label": "首次提示符就绪", "variant": "return"},
+    {"from": "pc", "to": "shell", "y": 300, "label": "记录 P₁ 后发送回车", "variant": "emphasis"},
+    {"from": "shell", "to": "device", "y": 350, "label": "展开 $EPOCHREALTIME"},
+    {"from": "device", "to": "shell", "y": 400, "label": "返回微秒读数 D", "variant": "return"},
+    {"from": "shell", "to": "pc", "y": 450, "label": "读到完整提示符时记录 P₂", "variant": "return"},
+    {"from": "pc", "to": "shell", "y": 550, "label": "关闭会话"}
+  ],
+  "cards": [
+    {"dot": "cyan", "title": "单次取时", "items": ["P₁ 和 P₂ 使用 PC 的系统时间。", "D 是设备生成提示符时读取的系统时间。"]},
+    {"dot": "emerald", "title": "时差范围", "items": ["下界为 D − P₂，上界为 D + 999 ns − P₁。", "假设时差稳定，取所有区间的交集后报告中点与半宽。"]}
+  ]
+}
