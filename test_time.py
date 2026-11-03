@@ -1,6 +1,6 @@
-"""Compare PC and device epoch time using Python's standard library and hdc.
+"""通过 HDC 测量设备与 PC 的时间差，正值表示设备时钟领先。
 
-Use CPython 3.13+ on Windows for high-resolution epoch timestamps.
+Windows 上请使用 CPython 3.13 或更高版本，以获取高分辨率的 PC 时间戳。
 """
 
 import argparse
@@ -37,7 +37,7 @@ def read_prompt(stream, pattern):
         output += chunk
         if match := pattern.search(output):
             return received, match
-    raise RuntimeError(f"hdc closed before {pattern.pattern!r}. Output: {output!r}")
+    raise RuntimeError(f"HDC 连接已关闭，未读到 {pattern.pattern!r}。设备输出：{output!r}")
 
 
 def collect_samples(address=None, tag=None):
@@ -81,7 +81,7 @@ def offset_bounds(samples):
     lower = max(device - after for before, device, after in samples)
     upper = min(device + 999 - before for before, device, after in samples)
     if lower > upper:
-        raise ValueError(f"No common clock offset: [{lower}, {upper}] ns. Check clock adjustments.")
+        raise ValueError(f"时差区间无交集（下界 {lower} ns，上界 {upper} ns），请检查采样期间是否发生校时。")
     return lower, upper
 
 
@@ -95,7 +95,7 @@ def relay(listener):
         while True:
             ready = select.select([client, server], [], [], 15)[0]
             if not ready:
-                raise TimeoutError("No traffic on the local HDC connection.")
+                raise TimeoutError("等待本地 HDC 连接数据超时。")
             for source in ready:
                 chunk = source.recv(65536)
                 received = time.time_ns()
@@ -122,7 +122,7 @@ def hdc_frames(chunks):
             yield when, bytes(buf[4:end])
             del buf[:end]
     if buf:
-        raise ValueError(f"Incomplete HDC frame ({len(buf)} bytes left).")
+        raise ValueError(f"HDC 数据帧不完整，剩余 {len(buf)} 字节。")
 
 
 def pair_samples(samples, upstream, downstream):
@@ -135,13 +135,13 @@ def pair_samples(samples, upstream, downstream):
         arrivals.extend([when] * len(payload))
     prompts = list(CLOCK.finditer(data))[1:]  # The setup prompt precedes the first probe.
     if len(sends) != len(samples) or len(prompts) != len(samples):
-        raise ValueError(f"{len(samples)} probes, {len(sends)} requests, {len(prompts)} replies.")
+        raise ValueError(f"采样次数与收发数量不符：采样 {len(samples)} 次，请求 {len(sends)} 次，回复 {len(prompts)} 次。")
     pairs = []
     for raw, sent, stamp in zip(samples, sends, prompts):
         received = arrivals[stamp.end() - 1]
         device = prompt_ns(stamp)
         if device != raw[1] or not raw[0] <= sent <= received <= raw[2]:
-            raise ValueError(f"HDC timestamp or ordering mismatch for probe {len(pairs) + 1}.")
+            raise ValueError(f"第 {len(pairs) + 1} 次采样的 HDC 时间戳或收发顺序不符。")
         pairs.append((sent, device, received))
     return pairs
 
@@ -152,21 +152,34 @@ def device_shell(command):
                                      stderr=subprocess.STDOUT, text=True, timeout=30)
     output, _, status = result.rstrip().rpartition("\n")
     if status != "CLOCK_PROBE_OK":
-        raise RuntimeError(f"{command}: {result}")
+        raise RuntimeError(f"设备命令执行失败：{command}\n{result}")
     return output
 
 
-def boot_anchor(directory):
-    """Read realtime and boottime in one device command, before tracing."""
+def boot_anchor(directory=None):
+    """Read the device boot-to-epoch offset from one clock snapshot."""
     text = device_shell("timestamps")
-    (directory / "timestamps.txt").write_text(text + "\n", encoding="utf-8")
+    print(f"设备时钟快照（hdc shell timestamps）\n{text}", flush=True)
+    if directory is not None:
+        (directory / "timestamps.txt").write_text(text + "\n", encoding="utf-8")
     clocks = []
     for name in ("CLOCK_REALTIME", "CLOCK_BOOTTIME"):
         values = re.findall(rf"^{name}[ \t]*:[ \t]*(\d+\.\d{{1,9}})[ \t]*$", text, re.M)
         if len(values) != 1:
-            raise ValueError(f"Expected one {name} in timestamps.txt, got {values!r}")
+            raise ValueError(f"timestamps 输出中应有一条 {name} 记录，实际匹配到 {values!r}")
         clocks.append(int(Decimal(values[0]) * 10**9))
     return clocks[0] - clocks[1]
+
+
+def report_boot_epochs(boot_epoch, lower, upper):
+    """Convert device-minus-PC bounds to the PC epoch for device boot time zero."""
+    pc_lower, pc_upper = boot_epoch - upper, boot_epoch - lower
+    pc_midpoint = (pc_lower + pc_upper) // 2
+    print(f"boot_epoch = {boot_epoch} 纳秒（设备时间基准）")
+    print(f"boot_epoch_pc = {pc_midpoint} 纳秒（PC 时间基准）")
+    print(f"按本次时差换算的 boot_epoch_pc 区间：[{pc_lower}, {pc_upper}] 纳秒")
+    return {"boot_epoch_ns": boot_epoch, "boot_epoch_pc_ns": pc_midpoint,
+            "boot_epoch_pc_bounds_ns": [pc_lower, pc_upper]}
 
 
 def capture_trace(directory, tag):
@@ -174,7 +187,7 @@ def capture_trace(directory, tag):
     remote = f"/data/local/tmp/{tag}.ftrace"
     begin = device_shell("hitrace --trace_begin -b 65536 --trace_clock boot app sched hdcd usb")
     if "OpenRecording done" not in begin:
-        raise RuntimeError(f"HiTrace did not confirm recording: {begin}")
+        raise RuntimeError(f"HiTrace 未确认开始采集。设备输出：{begin}")
     try:
         with socket.socket() as listener, ThreadPoolExecutor(max_workers=1) as worker:
             listener.bind(("127.0.0.1", 0))
@@ -190,7 +203,7 @@ def capture_trace(directory, tag):
     transfer = subprocess.check_output(["hdc", "file", "recv", remote, str(trace.resolve())],
                                        stderr=subprocess.STDOUT, text=True, timeout=60)
     if "FileTransfer finish" not in transfer or not trace.is_file() or not trace.stat().st_size:
-        raise RuntimeError(f"Could not retrieve {remote}: {transfer}")
+        raise RuntimeError(f"未能从设备取回 {remote}。HDC 输出：{transfer}")
     device_shell(f"rm -f {remote}")
     return samples, pair_samples(samples, *traffic)
 
@@ -244,30 +257,35 @@ def traced_measurement(directory):
     result = {"device_minus_pc_bounds_ns": [lower, upper], "raw_bounds_ns": [raw_lower, raw_upper],
               "boot_to_device_epoch_ns": anchor, "shell_tag": tag,
               "samples": len(samples), "matched_trace_slices": matched}
+    print(f"设备时间减 PC 时间（中点 ± 半宽）：{(lower + upper) / 2e6:+.3f} ± {(upper - lower) / 2e6:.3f} 毫秒")
+    print(f"区间半宽：修正前 {(raw_upper - raw_lower) / 2000:.1f} 微秒，修正后 {(upper - lower) / 2000:.1f} 微秒")
+    print(f"修正后时差区间：[{lower}, {upper}] 纳秒")
+    result.update(report_boot_epochs(anchor, lower, upper))
     (directory / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-    print(f"Device - PC: {(lower + upper) / 2e6:+.3f} ms +/- {(upper - lower) / 2e6:.3f} ms")
-    print(f"Half-width: raw {(raw_upper - raw_lower) / 2000:.1f} us, "
-          f"corrected {(upper - lower) / 2000:.1f} us")
-    print(f"Interval: [{lower}, {upper}] ns | trace matches: {matched}/{len(samples)}")
-    print(directory.resolve())
+    print(f"匹配到 HiTrace 调度记录的采样：{matched}/{len(samples)}")
+    print(f"输出目录：{directory.resolve()}")
 
 
 def main():
     """Report a quick offset, or capture and correct the same probes with HiTrace."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--trace", type=Path, metavar="NEW_DIR",
-                        help="capture HiTrace and save relay-corrected offsets in a new directory")
+    parser = argparse.ArgumentParser(description=__doc__, add_help=False)
+    options = parser.add_argument_group("选项")
+    options.add_argument("-h", "--help", action="help", help="显示帮助并退出")
+    options.add_argument("--trace", type=Path, metavar="新目录",
+                         help="采集 HiTrace，并将修正后的时差及采样记录保存到新目录")
     args = parser.parse_args()
     if args.trace is not None:
         traced_measurement(args.trace)
         return
+    anchor = boot_anchor()
     samples = collect_samples()
     lower, upper = offset_bounds(samples)
     before, device, after = min(samples, key=lambda row: row[2] - row[0])
-    print(f"Shortest of {len(samples)} requests: {(after - before) / 1e6:.3f} ms")
-    print(f"PC before write: {before} ns | device: {device} ns | PC on prompt: {after} ns")
-    print(f"Device - PC interval: [{lower}, {upper}] ns")
-    print(f"Midpoint: {(lower + upper) / 2e6:+.3f} ms +/- {(upper - lower) / 2e6:.3f} ms")
+    print(f"{len(samples)} 次采样中最短往返耗时：{(after - before) / 1e6:.3f} 毫秒")
+    print(f"该次采样（纳秒）：PC 发送前 {before}，设备读钟 {device}，PC 收到提示符 {after}")
+    print(f"设备时间减 PC 时间的区间：[{lower}, {upper}] 纳秒")
+    print(f"时差（中点 ± 半宽）：{(lower + upper) / 2e6:+.3f} ± {(upper - lower) / 2e6:.3f} 毫秒")
+    report_boot_epochs(anchor, lower, upper)
 
 
 if __name__ == "__main__":
