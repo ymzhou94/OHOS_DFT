@@ -59,6 +59,12 @@ python -m unittest discover -s tests -t . -v
 
 完整测量运行 `python test_time.py --trace clock-run`。输出目录必须是新目录，采集期间需独占 HiTrace。脚本先读取一次 `timestamps`，再开始 boot 时钟采集，在 PC 终端和本地 HDC 转发通道为同一批请求打点。`result.json` 保存修正前后的“设备时间减 PC 时间”区间，单位为纳秒。`per-probe.csv` 给出各次取时、PC 两端等待，以及读钟在 `boot.ftrace` 中的估计位置。调度列留空表示该读数无法与唯一的 CPU 运行片段对应。修正后的范围仍包含 USB 和设备侧时延。[采样时序图](docs/pc-device-clock.html)
 
+当前脚本在 20 次采样前依次等待 `0、1、2…19 ms`，每次等待位于上一轮 `P2` 与下一轮 `P1` 之间。下面的历史实测图中，横轴表示事件发生时间，同一时刻两只时钟读数的纵向差值为“设备时间减 PC 时间”`Δ`。
+
+![1 ms 递增等待下的采样位置与时钟差值](docs/clock-timing-1ms-increment.png)
+
+前两幅图展开前 4 次采样，最后一幅图显示 20 次区间取交集后，半宽从 `961.85 µs` 收紧到 `928.00 µs`。递增等待改变采样相位，可能帮助避开周期性延迟。这份单组记录展示了多次取交集的效果，无法单独证明其中多少收益来自 1 ms 递增。
+
 ### 推荐：直接 timestamps 采样
 
 ```sh

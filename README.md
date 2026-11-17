@@ -59,6 +59,12 @@ Each carriage return asks the same shell for a new timestamp. The interval assum
 
 For the complete measurement run `python test_time.py --trace clock-run` with a **new** output directory and exclusive use of HiTrace. It reads `timestamps` once, starts a boot-clock trace and measures the same probes at the PC terminal and at a loopback relay to the HDC server. `result.json` gives the raw and corrected device-minus-PC intervals in nanoseconds. `per-probe.csv` contains the timestamps, PC delays and estimated positions in `boot.ftrace`. Empty switch fields mean the device reading could not be associated with exactly one recorded CPU slice. USB and device-side delays remain inside the corrected bounds. [Sampling sequence](docs/pc-device-clock.html)
 
+The current sampler waits `0, 1, 2, …, 19 ms` before its 20 probes. Each wait falls between the previous `P2` and the next `P1`. In the historical measurement below, the horizontal axis shows when events occur, while the vertical distance between the clock readings at the same instant is the device-minus-PC offset `Δ`.
+
+![Event timing and clock offset with 1 ms incremental waits](docs/clock-timing-1ms-increment.png)
+
+The first two panels expand the first four probes. The last panel shows the interval half-width decreasing from `961.85 µs` to `928.00 µs` as all 20 intervals are intersected. Incremental waits change the sampling phase and may help avoid periodic delays. This single batch shows the effect of intersecting multiple samples, without establishing how much improvement comes from the 1 ms increment.
+
 ### Recommended: direct timestamps sampling
 
 ```sh
